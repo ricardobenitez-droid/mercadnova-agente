@@ -16,7 +16,7 @@ BASE_DIR = Path(__file__).resolve().parent
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "").strip()
-PDF_PATH = Path(os.getenv("PDF_PATH", str(BASE_DIR / "data" / "Documentacion_MercaNova_Ecommerce.pdf")))
+PDF_PATH = Path(os.getenv("PDF_PATH", str(BASE_DIR / "data" / "NovaStore.pdf")))
 PORT = int(os.getenv("PORT", "10000"))
 
 if not GEMINI_API_KEY:
@@ -318,8 +318,7 @@ with gr.Blocks(title="NovaBot | MercaNova") as demo:
         chatbot = gr.Chatbot(
             value=historial_inicial(),
             height=450,
-            show_label=False,
-            type="messages" 
+            show_label=False
         )
 
         with gr.Row():

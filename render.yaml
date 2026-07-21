@@ -16,6 +16,6 @@ services:
       - key: GEMINI_MODEL
         sync: false
       - key: PDF_PATH
-        value: data/Documentacion_MercaNova_Ecommerce.pdf
+        value: data/NovaStore.pdf
       - key: PYTHON_VERSION
         value: 3.12.8
