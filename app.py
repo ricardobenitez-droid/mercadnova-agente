@@ -16,7 +16,14 @@ BASE_DIR = Path(__file__).resolve().parent
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "").strip()
-PDF_PATH = Path(os.getenv("PDF_PATH", str(BASE_DIR / "data" / "NovaStore.pdf")))
+
+# CORRECCIÓN 1: Nombre exacto del archivo PDF por defecto
+PDF_PATH = Path(
+    os.getenv(
+        "PDF_PATH", 
+        str(BASE_DIR / "data" / "Documentacion_MercaNova_Ecommerce.pdf")
+    )
+)
 PORT = int(os.getenv("PORT", "10000"))
 
 if not GEMINI_API_KEY:
@@ -116,13 +123,19 @@ def formatear_historial(historial, limite: int = 6) -> str:
         return "Sin conversación anterior."
     lineas = []
     for mensaje in historial[-limite:]:
-        if not isinstance(mensaje, dict):
-            continue
-        rol = mensaje.get("role", "")
-        contenido = mensaje.get("content", "")
-        if isinstance(contenido, str):
+        # Manejo robusto de estructuras tipo diccionario o tuplas antiguas
+        if isinstance(mensaje, dict):
+            rol = mensaje.get("role", "")
+            contenido = mensaje.get("content", "")
             nombre = "Usuario" if rol == "user" else "Asistente"
-            lineas.append(f"{nombre}: {contenido}")
+            if isinstance(contenido, str) and contenido:
+                lineas.append(f"{nombre}: {contenido}")
+        elif isinstance(mensaje, (list, tuple)) and len(mensaje) == 2:
+            if mensaje[0]:
+                lineas.append(f"Usuario: {mensaje[0]}")
+            if mensaje[1]:
+                lineas.append(f"Asistente: {mensaje[1]}")
+                
     return "\n".join(lineas) if lineas else "Sin conversación anterior."
 
 def responder_ecommerce(pregunta, historial=None):
@@ -159,12 +172,16 @@ Si la respuesta no está en el contexto, respondé:
 
 No afirmes que MercaNova es una empresa real.
 Finalizá indicando las páginas consultadas.
+
 HISTORIAL RECIENTE:
 {historial_texto}
+
 CONTEXTO DOCUMENTAL:
 {contexto}
+
 PREGUNTA:
 {pregunta}
+
 Redactá la respuesta:
 """.strip()
 
@@ -202,7 +219,7 @@ def enviar_mensaje(mensaje, historial):
         return "", historial
         
     respuesta = responder_ecommerce(mensaje, historial)
-    nuevo_historial = historial + [
+    nuevo_historial = list(historial) + [
         {"role": "user", "content": mensaje},
         {"role": "assistant", "content": respuesta}
     ]
@@ -314,7 +331,6 @@ with gr.Blocks(title="NovaBot | MercaNova") as demo:
     )
 
     with gr.Column(elem_id="chat-panel"):
-        # Aseguramos type="messages" para compatibilidad con diccionarios en Gradio 6+
         chatbot = gr.Chatbot(
             value=historial_inicial(),
             height=450,
@@ -362,13 +378,13 @@ with gr.Blocks(title="NovaBot | MercaNova") as demo:
         boton.click(fn=ejecutar_rapida, inputs=[chatbot], outputs=[mensaje, chatbot])
 
 # ==========================================
-# 5. EJECUCIÓN (LISTO PARA RENDER)
+# 5. EJECUCIÓN EN RENDER
 # ==========================================
 if __name__ == "__main__":
     print(f"NovaBot iniciado con {TOTAL_PAGINAS} páginas y {len(FRAGMENTOS)} fragmentos.")
     print(f"Modelo configurado: {GEMINI_MODEL}")
     
-    # Lanzamos inyectando el tema, el css y la configuración del puerto
+    # CORRECCIÓN 2: Escuchar en 0.0.0.0 y usar el puerto PORT de Render
     demo.queue(default_concurrency_limit=4).launch(
         server_name="0.0.0.0",
         server_port=PORT,
