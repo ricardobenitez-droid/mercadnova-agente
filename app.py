@@ -8,28 +8,17 @@ from google import genai
 from pypdf import PdfReader
 from rank_bm25 import BM25Okapi
 
-# Carga .env únicamente durante pruebas locales.
-# En Render, las variables se configuran desde el dashboard.
+# ==========================================
+# 1. CONFIGURACIÓN INICIAL (RENDER & LOCAL)
+# ==========================================
 load_dotenv()
-
 BASE_DIR = Path(__file__).resolve().parent
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "").strip()
-
-PDF_PATH = Path(
-    os.getenv(
-        "PDF_PATH",
-        str(BASE_DIR / "data" / "NovaStore.pdf")
-    )
-)
-
-# Render entrega automáticamente PORT.
+PDF_PATH = Path(os.getenv("PDF_PATH", str(BASE_DIR / "data" / "Documentacion_MercaNova_Ecommerce.pdf")))
 PORT = int(os.getenv("PORT", "10000"))
 
-# ==========================================
-# VALIDACIONES INICIALES
-# ==========================================
 if not GEMINI_API_KEY:
     raise RuntimeError("Falta la variable de entorno GEMINI_API_KEY.")
 if not GEMINI_MODEL:
@@ -40,7 +29,7 @@ if not PDF_PATH.exists():
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 # ==========================================
-# LÓGICA DE EXTRACCIÓN Y BÚSQUEDA EN PDF
+# 2. PROCESAMIENTO DEL PDF Y BM25
 # ==========================================
 def normalizar_texto(texto: str) -> str:
     return re.sub(r"\s+", " ", texto).strip()
@@ -57,10 +46,7 @@ def dividir_texto(texto: str, pagina: int, tamano: int = 1000, solapamiento: int
                 fin = corte + 1
         contenido = texto[inicio:fin].strip()
         if contenido:
-            fragmentos.append({
-                "page": pagina,
-                "text": contenido
-            })
+            fragmentos.append({"page": pagina, "text": contenido})
         if fin >= len(texto):
             break
         inicio = max(fin - solapamiento, inicio + 1)
@@ -76,32 +62,45 @@ def cargar_documento(ruta_pdf: Path) -> tuple[list[dict], int]:
         raise RuntimeError("El PDF no contiene texto extraíble.")
     return fragmentos, len(lector.pages)
 
-# Cargar el PDF y crear el buscador (BM25)
 FRAGMENTOS, TOTAL_PAGINAS = cargar_documento(PDF_PATH)
 
 def tokenizar(texto: str) -> list[str]:
-    # 1. Convertir todo a minúsculas
     texto = texto.lower()
-    
-    # 2. Eliminar tildes para igualar palabras (ej. "envío" = "envio")
     tildes = {"á": "a", "é": "e", "í": "i", "ó": "o", "ú": "u", "ü": "u"}
     for con_tilde, sin_tilde in tildes.items():
         texto = texto.replace(con_tilde, sin_tilde)
         
-    # 3. Extraer solo las palabras
     palabras = re.findall(r"[a-zñ0-9]+", texto)
-    
     tokens = []
+    
+    sinonimos = {
+        "precio": ["tarifa", "costo", "valor", "monto"],
+        "precios": ["tarifas", "costos", "valores", "montos"],
+        "envio": ["entrega", "despacho", "transporte"],
+        "envios": ["entregas", "despachos", "transporte"],
+        "devolver": ["devolucion", "reembolso", "retorno"],
+        "devoluciones": ["reembolsos", "retornos"]
+    }
+    
     for p in palabras:
-        tokens.append(p) # Guardamos la palabra original
-        
-        # 4. Regla para plurales: si termina en 's' o 'es', agregamos también el singular
+        tokens.append(p)
+        singular = p
         if p.endswith('s') and len(p) > 3:
-            tokens.append(p[:-1]) # ej: envios -> envio
+            singular = p[:-1]
+            tokens.append(singular)
         if p.endswith('es') and len(p) > 4:
-            tokens.append(p[:-2]) # ej: nacionales -> nacional
+            singular = p[:-2]
+            tokens.append(singular)
+            
+        if p in sinonimos:
+            tokens.extend(sinonimos[p])
+        if singular in sinonimos and singular != p:
+            tokens.extend(sinonimos[singular])
             
     return tokens
+
+CORPUS_TOKENIZADO = [tokenizar(fragmento["text"]) for fragmento in FRAGMENTOS]
+BM25 = BM25Okapi(CORPUS_TOKENIZADO)
 
 def recuperar_fragmentos(pregunta: str, cantidad: int = 5) -> list[dict]:
     tokens = tokenizar(pregunta)
@@ -110,7 +109,7 @@ def recuperar_fragmentos(pregunta: str, cantidad: int = 5) -> list[dict]:
     return [FRAGMENTOS[indice] for indice in indices]
 
 # ==========================================
-# LÓGICA DEL AGENTE
+# 3. LÓGICA DEL AGENTE
 # ==========================================
 def formatear_historial(historial, limite: int = 6) -> str:
     if not historial:
@@ -121,53 +120,53 @@ def formatear_historial(historial, limite: int = 6) -> str:
             continue
         rol = mensaje.get("role", "")
         contenido = mensaje.get("content", "")
-        if not isinstance(contenido, str):
-            continue
-        nombre = "Usuario" if rol == "user" else "Asistente"
-        lineas.append(f"{nombre}: {contenido}")
+        if isinstance(contenido, str):
+            nombre = "Usuario" if rol == "user" else "Asistente"
+            lineas.append(f"{nombre}: {contenido}")
     return "\n".join(lineas) if lineas else "Sin conversación anterior."
 
 def responder_ecommerce(pregunta, historial=None):
     pregunta = (pregunta or "").strip()
     if not pregunta:
-        return "Escribí una pregunta sobre MercaNova."
-
+        return "Escribí una pregunta sobre la tienda."
+        
     documentos = recuperar_fragmentos(pregunta, cantidad=5)
-    bloques_contexto = []
+    bloques = []
     paginas_usadas = []
-    
     for documento in documentos:
         pagina = documento["page"]
         paginas_usadas.append(pagina)
-        bloques_contexto.append(f"[Página {pagina}]\n{documento['text']}")
+        bloques.append(f"[Página {pagina}]\n{documento['text']}")
         
-    contexto = "\n\n---\n\n".join(bloques_contexto)
+    contexto = "\n\n---\n\n".join(bloques)
     historial_texto = formatear_historial(historial)
     paginas_ordenadas = sorted(set(paginas_usadas))
     
-    prompt = f"""Sos NovaBot, el asistente documental de MercaNova,
-una tienda e-commerce ficticia creada para el Challenge Alura Agente.
-
+    prompt = f"""
+Sos NovaBot, el asistente documental de MercaNova,
+una tienda e-commerce ficticia creada para el
+Challenge Alura Agente.
 REGLAS OBLIGATORIAS:
-Respondé en español claro y directo.
-Utilizá exclusivamente el CONTEXTO DOCUMENTAL.
-No inventes precios, plazos, políticas, teléfonos, correos, productos ni procedimientos.
-Conservá exactamente los montos, límites y plazos.
-Si la respuesta no aparece en el contexto, respondé:
-  "No encontré esa información en la documentación disponible de MercaNova."
-No afirmes que MercaNova es una empresa real.
-Finalizá mencionando las páginas consultadas.
+Respondé en español claro.
+Utilizá únicamente el CONTEXTO DOCUMENTAL.
+No inventes precios, plazos, políticas, productos,
+ teléfonos, correos ni procedimientos.
 
+Mantené exactamente los montos y condiciones.
+Si la respuesta no está en el contexto, respondé:
+ "No encontré esa información en la documentación
+ disponible de MercaNova."
+
+No afirmes que MercaNova es una empresa real.
+Finalizá indicando las páginas consultadas.
 HISTORIAL RECIENTE:
 {historial_texto}
-
 CONTEXTO DOCUMENTAL:
 {contexto}
-
 PREGUNTA:
 {pregunta}
-
-Redactá la respuesta:"""
+Redactá la respuesta:
+""".strip()
 
     try:
         resultado = client.models.generate_content(
@@ -184,25 +183,193 @@ Redactá la respuesta:"""
     if "fuentes consultadas" not in respuesta.lower():
         paginas_texto = ", ".join(str(pagina) for pagina in paginas_ordenadas)
         respuesta += f"\n\n**Fuentes consultadas:** páginas {paginas_texto}."
-
     return respuesta
 
-# ==========================================
-# INTERFAZ GRÁFICA Y EJECUCIÓN
-# ==========================================
-tema = gr.themes.Soft()
-css = ""
+MENSAJE_BIENVENIDA = (
+    "¡Hola! Soy **NovaBot** 🛍️\n\n"
+    "Puedo ayudarte con envíos, pagos, devoluciones, "
+    "garantías, pedidos y políticas de MercaNova.\n\n"
+    "¿Qué necesitás consultar?"
+)
 
-# Aquí se construye la variable "demo"
-with gr.Blocks() as demo:
-    gr.Markdown("# 🤖 NovaBot - MercaNova")
-    # type="messages" asegura la compatibilidad con el nuevo formato de Gradio para el historial
-    gr.ChatInterface(fn=responder_ecommerce)
+def historial_inicial():
+    return [{"role": "assistant", "content": MENSAJE_BIENVENIDA}]
 
+def enviar_mensaje(mensaje, historial):
+    mensaje = (mensaje or "").strip()
+    historial = historial or historial_inicial()
+    if not mensaje:
+        return "", historial
+        
+    respuesta = responder_ecommerce(mensaje, historial)
+    nuevo_historial = historial + [
+        {"role": "user", "content": mensaje},
+        {"role": "assistant", "content": respuesta}
+    ]
+    return "", nuevo_historial
+
+def limpiar_chat():
+    return historial_inicial(), ""
+
+consultas = [
+    ("Envíos 🚚", "¿Cuánto cuesta el envío a Nacional o Internacional?"),
+    ("Devoluciones 🔄", "¿Cuántos días tengo para devolver un producto?"),
+    ("Pagos 💳", "¿Qué métodos de pago acepta la tienda?"),
+    ("Garantías 🛡️", "¿Qué cubre la garantía?"),
+    ("Seguimiento 📍", "¿Cómo puedo rastrear mi pedido?"),
+    ("Cancelaciones ❌", "¿Puedo cancelar un pedido ya confirmado?")
+]
+
+# ==========================================
+# 4. INTERFAZ GRÁFICA (TEMA, CSS Y BLOQUES)
+# ==========================================
+tema = gr.themes.Soft(
+    primary_hue="indigo",
+    secondary_hue="violet",
+    neutral_hue="slate",
+    font=[gr.themes.GoogleFont("Inter"), "ui-sans-serif", "system-ui", "sans-serif"]
+)
+
+css = """
+html, body {
+    background-color: #F3F4F6 !important;
+    overflow-x: hidden !important;
+}
+.gradio-container {
+    max-width: 1000px !important;
+    margin: 0 auto !important;
+    padding: 30px 20px !important;
+    background: transparent !important;
+    border: none !important;
+}
+#header {
+    padding: 30px;
+    margin-bottom: 24px;
+    border-radius: 16px;
+    color: white;
+    background: linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%);
+    box-shadow: 0 10px 15px -3px rgba(79, 70, 229, 0.3);
+}
+.badge-container {
+    margin-top: 16px;
+    display: flex;
+    gap: 12px;
+    font-size: 0.85rem;
+    flex-wrap: wrap;
+}
+.badge {
+    background: rgba(255, 255, 255, 0.2);
+    padding: 6px 12px;
+    border-radius: 20px;
+    backdrop-filter: blur(4px);
+    font-weight: 500;
+    letter-spacing: 0.3px;
+}
+#chat-panel {
+    background: #FFFFFF !important;
+    border-radius: 16px !important;
+    padding: 24px !important;
+    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.01) !important;
+    border: 1px solid #E5E7EB !important;
+}
+.quick-button {
+    background: #F9FAFB !important;
+    border: 1px solid #E5E7EB !important;
+    color: #4B5563 !important;
+    border-radius: 12px !important;
+    min-height: 48px !important;
+    font-weight: 500 !important;
+    transition: all 0.2s ease-in-out !important;
+}
+.quick-button:hover {
+    border-color: #4F46E5 !important;
+    color: #4F46E5 !important;
+    background: #EEF2FF !important;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 6px -1px rgba(79, 70, 229, 0.1);
+}
+footer {
+    display: none !important;
+}
+"""
+
+with gr.Blocks(title="NovaBot | MercaNova") as demo:
+    gr.HTML(
+        """
+        <section id="header">
+            <h1 style="margin: 0; font-size: 2rem; font-weight: 700; display: flex; align-items: center; gap: 10px;">
+                🛍️ NovaBot
+                <span style="font-size: 1.1rem; font-weight: 400; opacity: 0.85;">por MercaNova</span>
+            </h1>
+            <p style="margin: 5px 0 0 0; font-size: 1.05rem; opacity: 0.9;">
+                Tu asistente de compras inteligente
+            </p>
+            <div class="badge-container">
+                <span class="badge">🟢 En línea</span>
+                <span class="badge">📦 Catálogo sincronizado</span>
+                <span class="badge">✨ Fuentes verificadas</span>
+            </div>
+        </section>
+        """
+    )
+
+    with gr.Column(elem_id="chat-panel"):
+        # Aseguramos type="messages" para compatibilidad con diccionarios en Gradio 6+
+        chatbot = gr.Chatbot(
+            value=historial_inicial(),
+            height=450,
+            show_label=False,
+            type="messages" 
+        )
+
+        with gr.Row():
+            mensaje = gr.Textbox(
+                placeholder="Escribí tu consulta sobre MercaNova...",
+                show_label=False,
+                container=False,
+                scale=8
+            )
+            enviar = gr.Button("Enviar ➤", variant="primary", scale=2)
+            limpiar = gr.Button("Limpiar", variant="secondary", scale=1)
+
+        gr.Markdown("<h3 style='color: #374151; margin-top: 15px; margin-bottom: 5px;'>⚡ Consultas rápidas</h3>")
+
+        botones = []
+        with gr.Row():
+            for titulo, pregunta in consultas[:3]:
+                boton = gr.Button(titulo, elem_classes=["quick-button"])
+                botones.append((boton, pregunta))
+
+        with gr.Row():
+            for titulo, pregunta in consultas[3:]:
+                boton = gr.Button(titulo, elem_classes=["quick-button"])
+                botones.append((boton, pregunta))
+
+        gr.Markdown(
+            "<p style='text-align: center; color: #9CA3AF; font-size: 0.85rem; margin-top: 15px;'>"
+            "MercaNova es una empresa ficticia creada para el Challenge Alura Agente."
+            "</p>"
+        )
+
+    # Eventos
+    enviar.click(fn=enviar_mensaje, inputs=[mensaje, chatbot], outputs=[mensaje, chatbot])
+    mensaje.submit(fn=enviar_mensaje, inputs=[mensaje, chatbot], outputs=[mensaje, chatbot])
+    limpiar.click(fn=limpiar_chat, inputs=[], outputs=[chatbot, mensaje])
+
+    for boton, pregunta in botones:
+        def ejecutar_rapida(historial, p=pregunta):
+            return enviar_mensaje(p, historial)
+        
+        boton.click(fn=ejecutar_rapida, inputs=[chatbot], outputs=[mensaje, chatbot])
+
+# ==========================================
+# 5. EJECUCIÓN (LISTO PARA RENDER)
+# ==========================================
 if __name__ == "__main__":
     print(f"NovaBot iniciado con {TOTAL_PAGINAS} páginas y {len(FRAGMENTOS)} fragmentos.")
     print(f"Modelo configurado: {GEMINI_MODEL}")
     
+    # Lanzamos inyectando el tema, el css y la configuración del puerto
     demo.queue(default_concurrency_limit=4).launch(
         server_name="0.0.0.0",
         server_port=PORT,
