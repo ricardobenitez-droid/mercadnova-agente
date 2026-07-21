@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: mercanova-agente
+    runtime: python
+    plan: free
+
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app.py
+
+    autoDeployTrigger: commit
+    
+    envVars:
+
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        sync: false
+      - key: PDF_PATH
+        value: data/Documentacion_MercaNova_Ecommerce.pdf
+      - key: PYTHON_VERSION
+        value: 3.12.8
