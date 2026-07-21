@@ -10,6 +10,7 @@ tema = gr.themes.Soft(
     neutral_hue="slate",      
     font=[gr.themes.GoogleFont("Inter"), "ui-sans-serif", "system-ui", "sans-serif"]
 )
+
 css = """..."""
 
 def enviar_mensaje(mensaje, historial):
