@@ -80,10 +80,28 @@ def cargar_documento(ruta_pdf: Path) -> tuple[list[dict], int]:
 FRAGMENTOS, TOTAL_PAGINAS = cargar_documento(PDF_PATH)
 
 def tokenizar(texto: str) -> list[str]:
-    return re.findall(r"[a-záéíóúüñ0-9]+", texto.lower())
-
-CORPUS_TOKENIZADO = [tokenizar(fragmento["text"]) for fragmento in FRAGMENTOS]
-BM25 = BM25Okapi(CORPUS_TOKENIZADO)
+    # 1. Convertir todo a minúsculas
+    texto = texto.lower()
+    
+    # 2. Eliminar tildes para igualar palabras (ej. "envío" = "envio")
+    tildes = {"á": "a", "é": "e", "í": "i", "ó": "o", "ú": "u", "ü": "u"}
+    for con_tilde, sin_tilde in tildes.items():
+        texto = texto.replace(con_tilde, sin_tilde)
+        
+    # 3. Extraer solo las palabras
+    palabras = re.findall(r"[a-zñ0-9]+", texto)
+    
+    tokens = []
+    for p in palabras:
+        tokens.append(p) # Guardamos la palabra original
+        
+        # 4. Regla para plurales: si termina en 's' o 'es', agregamos también el singular
+        if p.endswith('s') and len(p) > 3:
+            tokens.append(p[:-1]) # ej: envios -> envio
+        if p.endswith('es') and len(p) > 4:
+            tokens.append(p[:-2]) # ej: nacionales -> nacional
+            
+    return tokens
 
 def recuperar_fragmentos(pregunta: str, cantidad: int = 5) -> list[dict]:
     tokens = tokenizar(pregunta)
