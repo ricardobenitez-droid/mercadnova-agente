@@ -1,3 +1,6 @@
+# Link de acceso a agente
+https://mercadnova-agente.onrender.com/
+
 # 🛍️ NovaBot — Asistente Virtual para MercaNova
 
 **NovaBot** es un agente conversacional e-commerce impulsado por Inteligencia Artificial y arquitectura **RAG (Retrieval-Augmented Generation)**. Fue desarrollado para responder consultas de usuarios sobre envíos, pagos, devoluciones, garantías y políticas de **MercaNova** utilizando únicamente la documentación oficial cargada en el sistema.
